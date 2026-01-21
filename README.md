@@ -118,7 +118,10 @@ You must launch Chrome with specific flags to force QUIC on localhost and ignore
 
 ```
 Enable webtransport in chrome://flags/
+
 <img width="783" height="359" alt="Screenshot 2026-01-21 at 11 28 40 AM" src="https://github.com/user-attachments/assets/7fd2e45a-cc03-4aa8-a705-dfdb2d273e0f" />
+
+Relaunch your chrome
 
 **Verification:**
 
