@@ -13,9 +13,12 @@ import io.netty.util.ReferenceCounted;
 
 import java.nio.charset.StandardCharsets;
 
+import org.apache.log4j.Logger;
+
 import static io.github.webtransport4j.incubator.WebTransportUtils.writeVarInt;
 
 public final class WebTransportMessage implements ReferenceCounted {
+    private static final Logger logger = Logger.getLogger(WebTransportMessage.class.getName());
 
     public enum MessageType {
         DATAGRAM,
@@ -30,7 +33,8 @@ public final class WebTransportMessage implements ReferenceCounted {
     private final ByteBuf payload;
     private final Channel channel;
 
-    public WebTransportMessage(MessageType type, String path, long sessionId, long streamId, ByteBuf payload, Channel channel) {
+    public WebTransportMessage(MessageType type, String path, long sessionId, long streamId, ByteBuf payload,
+            Channel channel) {
         this.type = type;
         this.path = path;
         this.sessionId = sessionId;
@@ -39,19 +43,34 @@ public final class WebTransportMessage implements ReferenceCounted {
         this.channel = channel;
     }
 
-    public String getPath() { return path; }
-    public MessageType getType() { return type; }
-    public long getSessionId() { return sessionId; }
-    public long getStreamId() { return streamId; }
-    public ByteBuf getPayload() { return payload; }
+    public String getPath() {
+        return path;
+    }
+
+    public MessageType getType() {
+        return type;
+    }
+
+    public long getSessionId() {
+        return sessionId;
+    }
+
+    public long getStreamId() {
+        return streamId;
+    }
+
+    public ByteBuf getPayload() {
+        return payload;
+    }
+
     public void reply(String text) {
         if (type == MessageType.UNIDIRECTIONAL) {
-            System.err.println("❌ ERROR: Cannot 'reply' to a Unidirectional Stream. Use sendDatagram() or openStream() instead.");
+            System.err.println(
+                    "❌ ERROR: Cannot 'reply' to a Unidirectional Stream. Use sendDatagram() or openStream() instead.");
             return;
         }
 
         ByteBuf buffer = channel.alloc().directBuffer();
-
 
         writeVarInt(buffer, 0x41);
         writeVarInt(buffer, this.sessionId);
@@ -60,10 +79,11 @@ public final class WebTransportMessage implements ReferenceCounted {
             if (!future.isSuccess()) {
                 System.err.println("❌ Reply Failed: " + future.cause());
             } else {
-                System.out.println("✅ Reply Sent: " + text);
+                logger.debug("✅ Reply Sent: " + text);
             }
         });
     }
+
     public void sendDatagram(String text) {
         Channel rawChannel = (channel instanceof QuicStreamChannel) ? channel.parent() : channel;
         ByteBuf buffer = rawChannel.alloc().directBuffer();
@@ -73,11 +93,10 @@ public final class WebTransportMessage implements ReferenceCounted {
             if (!future.isSuccess()) {
                 System.err.println("❌ Reply Failed: " + future.cause());
             } else {
-                System.out.println("✅ Reply Sent: " + text);
+                logger.debug("✅ Reply Sent: " + text);
             }
         });
     }
-
 
     /**
      * PATTERN A: Fire-and-Forget (Create -> Push -> Close)
@@ -127,9 +146,12 @@ public final class WebTransportMessage implements ReferenceCounted {
             }
         });
     }
+
     // --- REFERENCE COUNTING (Mandatory for ByteBuf safety) ---
     @Override
-    public int refCnt() { return payload.refCnt(); }
+    public int refCnt() {
+        return payload.refCnt();
+    }
 
     @Override
     public WebTransportMessage retain() {

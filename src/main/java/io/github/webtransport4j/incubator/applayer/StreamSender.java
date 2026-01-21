@@ -1,5 +1,7 @@
 package io.github.webtransport4j.incubator.applayer;
 
+import org.apache.log4j.Logger;
+
 /**
  * @author https://github.com/sanjomo
  * @date 20/01/26 1:25 am
@@ -9,6 +11,7 @@ import io.netty.channel.Channel;
 import io.netty.util.CharsetUtil;
 
 public class StreamSender {
+    private static final Logger logger = Logger.getLogger(StreamSender.class.getName());
     private final Channel streamChannel;
 
     public StreamSender(Channel streamChannel) {
@@ -26,7 +29,7 @@ public class StreamSender {
                 if (!future.isSuccess()) {
                     System.err.println("❌ Push Failed: " + future.cause());
                 } else {
-                    System.out.println("✅ Push Sent: " + payload);
+                    logger.debug("✅ Push Sent: " + payload);
                 }
             });
         } else {

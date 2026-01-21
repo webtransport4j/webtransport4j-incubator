@@ -6,21 +6,23 @@ import io.netty.util.AttributeKey;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.apache.log4j.Logger;
+
 /**
  * @author https://github.com/sanjomo
  * @date 24/12/25 1:20 am
  */
 
 public class WebTransportSessionManager {
+    private static final Logger logger = Logger.getLogger(WebTransportSessionManager.class.getName());
 
     // Key used to attach this manager to the Parent QUIC Channel
-    public static final AttributeKey<WebTransportSessionManager> WT_SESSION_MGR =
-            AttributeKey.valueOf("wt.session.manager");
+    public static final AttributeKey<WebTransportSessionManager> WT_SESSION_MGR = AttributeKey
+            .valueOf("wt.session.manager");
 
     // Key: The Session ID (which is the Stream ID of the CONNECT stream)
     // Value: The Session object containing state
-    private final Map<Long, WebTransportSession> sessions =
-            new ConcurrentHashMap<>();
+    private final Map<Long, WebTransportSession> sessions = new ConcurrentHashMap<>();
 
     /**
      * Called when a CONNECT webtransport request is accepted (200 OK).
@@ -29,11 +31,10 @@ public class WebTransportSessionManager {
         long sessionStreamId = connectStream.streamId();
 
         // Create the session state
-        WebTransportSession session =
-                new WebTransportSession(sessionStreamId, connectStream);
+        WebTransportSession session = new WebTransportSession(sessionStreamId, connectStream);
 
         sessions.put(sessionStreamId, session);
-        System.out.println("📝 SessionManager: Registered Session ID " + sessionStreamId);
+        logger.debug("📝 SessionManager: Registered Session ID " + sessionStreamId);
         return session;
     }
 
@@ -54,7 +55,7 @@ public class WebTransportSessionManager {
     public void remove(long sessionStreamId) {
         WebTransportSession removed = sessions.remove(sessionStreamId);
         if (removed != null) {
-            System.out.println("🗑️ SessionManager: Removed Session ID " + sessionStreamId);
+            logger.debug("🗑️ SessionManager: Removed Session ID " + sessionStreamId);
         }
     }
 
@@ -64,7 +65,8 @@ public class WebTransportSessionManager {
      */
     public void closeAll() {
         if (!sessions.isEmpty()) {
-            System.out.println("💥 SessionManager: Closing all " + sessions.size() + " active sessions due to connection close.");
+            logger.debug(
+                    "💥 SessionManager: Closing all " + sessions.size() + " active sessions due to connection close.");
             sessions.clear();
         }
     }

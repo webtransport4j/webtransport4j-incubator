@@ -8,7 +8,10 @@ package io.github.webtransport4j.incubator.applayer;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.apache.log4j.Logger;
+
 public class ServerPushService {
+    private static final Logger logger = Logger.getLogger(ServerPushService.class.getName());
 
     // Singleton Instance
     public static final ServerPushService INSTANCE = new ServerPushService();
@@ -18,16 +21,15 @@ public class ServerPushService {
 
     public void register(String key, StreamSender sender) {
         registry.put(key, sender);
-        System.out.println("✅ REGISTERED: " + key + " (Total: " + registry.size() + ")");
+        logger.debug("✅ REGISTERED: " + key + " (Total: " + registry.size() + ")");
 
         // Safety: Auto-remove from map if the underlying channel closes
         sender.getStreamChannel().closeFuture().addListener(f -> unregister(key));
     }
 
-
     public void unregister(String key) {
         if (registry.remove(key) != null) {
-            System.out.println("❌ UNREGISTERED: " + key);
+            logger.debug("❌ UNREGISTERED: " + key);
         }
     }
 
