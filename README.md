@@ -124,3 +124,95 @@ You must launch Chrome with specific flags to force QUIC on localhost and ignore
 2. Open DevTools (**Cmd+Option+I**) -> **Network** tab.
 3. Look for the connection request.
 4. **Protocol** column should say **`h3`** (HTTP/3).
+
+**Use this in chrome console to test webtrasnport all uni/bi/datagram apis**
+
+```bash
+// 1. Connect (No hash needed with mkcert!)
+const transport = new WebTransport("https://localhost:4433”);
+
+// Helper to decode server responses
+const textDecoder = new TextDecoder();
+const textEncoder = new TextEncoder();
+
+// --- SETUP LISTENERS (To see what the server sends back) ---
+
+// A. Listen for Incoming Datagrams
+(async () => {
+  const reader = transport.datagrams.readable.getReader();
+  console.log("👂 Listening for Datagrams...");
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    console.log("Received Datagram:", textDecoder.decode(value));
+  }
+})();
+
+// B. Listen for Incoming Unidirectional Streams
+(async () => {
+  const reader = transport.incomingUnidirectionalStreams.getReader();
+  console.log("👂 Listening for Uni Streams...");
+  while (true) {
+    const { value: stream, done } = await reader.read();
+    if (done) break;
+    readStream(stream, "Uni");
+  }
+})();
+
+// C. Listen for Incoming Bidirectional Streams
+(async () => {
+  const reader = transport.incomingBidirectionalStreams.getReader();
+  console.log("👂 Listening for Bi Streams...");
+  while (true) {
+    const { value: stream, done } = await reader.read();
+    if (done) break;
+    readStream(stream.readable, "Bi-Incoming");
+  }
+})();
+
+// Helper to read data from a stream
+async function readStream(readableStream, type) {
+  const reader = readableStream.getReader();
+  console.log(`OPENED: ${type} Stream`);
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    console.log(`Received [${type}]:`, textDecoder.decode(value));
+  }
+  console.log(`CLOSED: ${type} Stream`);
+}
+
+// --- ACTIVE TESTS (Send Data) ---
+
+try {
+  console.log("⏳ Waiting for connection...");
+  await transport.ready;
+  console.log("✅ TRANSPORT READY!");
+
+  // TEST 1: Send Datagram (Fire and forget)
+  console.log("🚀 sending Datagram...");
+  const datagramWriter = transport.datagrams.writable.getWriter();
+  datagramWriter.write(textEncoder.encode("Hello Datagram! 📦"));
+  datagramWriter.releaseLock();
+
+  // TEST 2: Create Unidirectional Stream (Send only)
+  console.log("🚀 opening Uni Stream...");
+  const uniStream = await transport.createUnidirectionalStream();
+  const uniWriter = uniStream.getWriter();
+  await uniWriter.write(textEncoder.encode("Hello Unidirectional Stream! ➡️"));
+  await uniWriter.close(); // Important to close stream so server knows we are done
+
+  // TEST 3: Create Bidirectional Stream (Send and Request Reply)
+  console.log("🚀 opening Bi Stream...");
+  const biStream = await transport.createBidirectionalStream();
+  const biWriter = biStream.writable.getWriter();
+  await biWriter.write(textEncoder.encode("Hello Bidirectional! ↔️"));
+  //await biWriter.close();
+  
+  // Read the reply from the server for this specific stream
+  readStream(biStream.readable, "Bi-Reply");
+
+} catch (e) {
+  console.error("❌ Connection failed:", e);
+}
+```
