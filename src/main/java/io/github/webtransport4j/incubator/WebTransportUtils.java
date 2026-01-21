@@ -1,0 +1,139 @@
+package io.github.webtransport4j.incubator;
+
+/**
+ * @author https://github.com/sanjomo
+ * @date 20/01/26 10:58 pm
+ */
+
+import io.github.webtransport4j.incubator.applayer.ServerPushService;
+import io.github.webtransport4j.incubator.applayer.StreamSender;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.Unpooled;
+import io.netty.channel.ChannelInboundHandlerAdapter;
+import io.netty.handler.codec.quic.QuicChannel;
+import io.netty.handler.codec.quic.QuicStreamChannel;
+import io.netty.handler.codec.quic.QuicStreamType;
+import io.netty.util.concurrent.Future;
+import io.netty.util.concurrent.Promise;
+
+public class WebTransportUtils {
+
+    private static final int UNI_STREAM_TYPE = 0x54; // WebTransport Unidirectional ID
+
+    /**
+     * Creates a new Server-Initiated Unidirectional Stream.
+     * @param connection The parent QUIC Connection
+     * @param sessionId The WebTransport Session ID to bind to
+     * @return A Future that completes with the StreamSender
+     */
+    public static Future<StreamSender> createUniStream(QuicChannel connection, long sessionId, String key) {
+        Promise<StreamSender> promise = connection.eventLoop().newPromise();
+
+        // 1. Request Stream Creation
+        connection.createStream(QuicStreamType.UNIDIRECTIONAL, new ChannelInboundHandlerAdapter())
+                .addListener((Future<QuicStreamChannel> future) -> {
+                    if (!future.isSuccess()) {
+                        promise.setFailure(future.cause());
+                        return;
+                    }
+
+                    QuicStreamChannel stream = future.getNow();
+
+                    // 2. Write the Mandatory Header: [0x54] [SessionID]
+                    // We write this synchronously before giving the stream to the user.
+                    ByteBuf header = Unpooled.buffer(16);
+                    try {
+                        writeVarInt(header, UNI_STREAM_TYPE);
+                        writeVarInt(header, sessionId);
+                        stream.writeAndFlush(header);
+                        StreamSender sender = new StreamSender(stream);
+                        if (key != null) {
+                            ServerPushService.INSTANCE.register(key, sender);
+                        }
+
+                        promise.setSuccess(sender);
+                    } catch (Exception e) {
+                        header.release();
+                        stream.close();
+                        promise.setFailure(e);
+                    }
+                });
+
+        return promise;
+    }
+
+    public static void writeVarInt(ByteBuf out, long value) {
+        // QUIC VarInts are limited to 62 bits (max roughly 4.6 quintillion)
+        // 0x3FFFFFFFFFFFFFFF is the max valid value (2^62 - 1)
+        if (value < 0 || value > 0x3FFFFFFFFFFFFFFFL) {
+            throw new IllegalArgumentException("Invalid QUIC VarInt: " + value);
+        }
+
+        // "LZCNT" calculation - extremely fast on modern CPUs
+        int requiredBits = 64 - Long.numberOfLeadingZeros(value);
+
+        if (requiredBits <= 6) {
+            // 1 Byte (00xxxxxx)
+            out.writeByte((int) value);
+
+        } else if (requiredBits <= 14) {
+            // 2 Bytes (01xxxxxx...)
+            // We cast to int, but writeShort only uses the lower 16 bits
+            out.writeShort((int) (value | 0x4000L));
+
+        } else if (requiredBits <= 30) {
+            // 4 Bytes (10xxxxxx...)
+            out.writeInt((int) (value | 0x80000000L));
+
+        } else {
+            // 8 Bytes (11xxxxxx...)
+            out.writeLong(value | 0xC000000000000000L);
+        }
+    }
+
+    public static long readVariableLengthInt(ByteBuf in) {
+        // 1. Quick check: Is there even 1 byte to peek?
+        if (!in.isReadable()) {
+            return -1;
+        }
+
+        // 2. Peek at the first byte (unsigned) to determine the length
+        // We do NOT move the readerIndex yet.
+        int first = in.getUnsignedByte(in.readerIndex());
+
+        // 3. OPTIMIZATION: Calculate length using bit shifts
+        // The top 2 bits (0-3) map perfectly to powers of 2 (1, 2, 4, 8)
+        // 00 (0) -> 1 << 0 = 1 byte
+        // 01 (1) -> 1 << 1 = 2 bytes
+        // 10 (2) -> 1 << 2 = 4 bytes
+        // 11 (3) -> 1 << 3 = 8 bytes
+        int len = 1 << (first >> 6);
+
+        // 4. Check if we have the full integer available
+        if (in.readableBytes() < len) {
+            return -1;
+        }
+
+        // 5. Read and mask (strip the prefix bits)
+        switch (len) {
+            case 1:
+                // Prefix 00: No masking needed (value is 0-63)
+                return in.readByte();
+
+            case 2:
+                // Prefix 01: Mask with 0x3FFF (14 bits)
+                return in.readShort() & 0x3FFF;
+
+            case 4:
+                // Prefix 10: Mask with 0x3FFFFFFF (30 bits)
+                return in.readInt() & 0x3FFFFFFF;
+
+            case 8:
+                // Prefix 11: Mask with 0x3FFFF... (62 bits)
+                return in.readLong() & 0x3FFFFFFFFFFFFFFFL;
+
+            default:
+                throw new IllegalStateException("Should not happen");
+        }
+    }
+}
