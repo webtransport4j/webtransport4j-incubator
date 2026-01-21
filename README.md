@@ -1,5 +1,7 @@
 # webtransport4j-incubator
 
+The first high-performance WebTransport server for the Java ecosystem, powered by Netty's asynchronous HTTP/3 stack.
+
 # Local Development Guide
 
 Follow these steps to run `webtransport4j` locally with a trusted self-signed certificate and a secure browser connection.
