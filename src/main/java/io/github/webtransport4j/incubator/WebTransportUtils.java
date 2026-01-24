@@ -13,10 +13,13 @@ import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.handler.codec.quic.QuicChannel;
 import io.netty.handler.codec.quic.QuicStreamChannel;
 import io.netty.handler.codec.quic.QuicStreamType;
+import io.netty.util.AttributeKey;
 import io.netty.util.concurrent.Future;
 import io.netty.util.concurrent.Promise;
 
 public class WebTransportUtils {
+    public static final AttributeKey<Long> SESSION_ID_KEY = AttributeKey.valueOf("wt.session.id");
+    public static final AttributeKey<Long> STREAM_TYPE_KEY = AttributeKey.valueOf("wt.stream.type");
 
     private static final int UNI_STREAM_TYPE = 0x54; // WebTransport Unidirectional ID
 

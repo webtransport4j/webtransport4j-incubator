@@ -12,16 +12,6 @@ public class WebTransportDatagramHandler extends SimpleChannelInboundHandler<Byt
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, ByteBuf msg) throws Exception {
         logger.debug("☄️ DatagramHandler received data");
-        long quarterStreamId = WebTransportUtils.readVariableLengthInt(msg);
-        long sessionId = quarterStreamId << 2;
-        String savedPath = ctx.channel().attr(WebTransportServer.SESSION_PATH_KEY).get();
-        WebTransportMessage wtMsg = new WebTransportMessage(
-                WebTransportMessage.MessageType.DATAGRAM,
-                (savedPath != null) ? savedPath : "?",
-                sessionId,
-                -1,
-                msg.retain(),
-                ctx.channel());
-        ctx.fireChannelRead(wtMsg);
+        ctx.fireChannelRead(msg.retain());
     }
 }

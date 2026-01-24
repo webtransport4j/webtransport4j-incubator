@@ -1,12 +1,10 @@
 package io.github.webtransport4j.incubator;
 
-/**
- * @author https://github.com/sanjomo
- * @date 20/01/26 1:01 am
- */
-
+import io.netty.buffer.ByteBuf;
+import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.handler.codec.quic.QuicStreamChannel;
 
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
@@ -14,50 +12,113 @@ import java.util.concurrent.Executors;
 
 import org.apache.log4j.Logger;
 
-public class WebTransportMessageDispatcher extends SimpleChannelInboundHandler<WebTransportMessage> {
-    
+import static io.github.webtransport4j.incubator.WebTransportUtils.writeVarInt;
+
+public class WebTransportMessageDispatcher extends SimpleChannelInboundHandler<ByteBuf> {
+
     private static final Logger logger = Logger.getLogger(WebTransportMessageDispatcher.class.getName());
     // Simulating your Business Logic Thread Pool
     private static final ExecutorService businessPool = Executors.newFixedThreadPool(4);
 
     @Override
-    protected void channelRead0(ChannelHandlerContext ctx, WebTransportMessage msg) {
-        // We received the clean POJO!
-        // The previous handler passed us ownership, so we must be careful with the
-        // payload.
-        // Offload to Business Thread
-        // CRITICAL: We must .retain() the payload because we are switching threads.
-        // If we don't, Netty will release it as soon as this method returns.
-        msg.retain();
+    protected void channelRead0(ChannelHandlerContext ctx, ByteBuf msg) {
+        // We receive raw ByteBuf now!
+        Channel channel = ctx.channel();
+
+        long sessionId;
+        String path;
+        String type;
+        ByteBuf payload;
+
+        // 1. Determine Context (Stream vs Datagram)
+        if (channel instanceof QuicStreamChannel) {
+            // STREAM (Bidirectional or Unidirectional)
+            QuicStreamChannel stream = (QuicStreamChannel) channel;
+            Long sessIdAttr = stream.attr(WebTransportUtils.SESSION_ID_KEY).get();
+            Long typeAttr = stream.attr(WebTransportUtils.STREAM_TYPE_KEY).get();
+            String pathAttr = stream.parent().attr(WebTransportServer.SESSION_PATH_KEY).get();
+
+            sessionId = (sessIdAttr != null) ? sessIdAttr : -1;
+            path = (pathAttr != null) ? pathAttr : "?";
+
+            if (typeAttr != null) {
+                type = (typeAttr == 0x54) ? "UNIDIRECTIONAL" : "BIDIRECTIONAL"; // Simple heuristic based on current
+                                                                                // code
+            } else {
+                type = "BIDIRECTIONAL"; // Default/Fallback
+            }
+            payload = msg; // Full message is payload
+
+        } else {
+            
+            long quarterStreamId = WebTransportUtils.readVariableLengthInt(msg);
+            sessionId = quarterStreamId; // In DatagramHandler it was << 2, but let's check spec.
+        
+
+            sessionId = quarterStreamId; // Is it quarterStreamId?
+            
+            sessionId = quarterStreamId << 2;
+
+            String pathAttr = channel.attr(WebTransportServer.SESSION_PATH_KEY).get();
+            path = (pathAttr != null) ? pathAttr : "?";
+            type = "DATAGRAM";
+            payload = msg; // Remainder (readVariableLengthInt advanced readerIndex)
+        }
+
+        // 2. Offload to Business Logic
+        // CRITICAL: Retain payload for async processing
+        payload.retain();
+
+        final long finalSessionId = sessionId;
+        final String finalPath = path;
+        final String finalType = type;
 
         businessPool.submit(() -> {
             try {
-                processBusinessLogic(msg);
+                processBusinessLogic(channel, finalSessionId, finalPath, finalType, payload);
             } finally {
-                // CRITICAL: Release memory when business logic is done
-                msg.release();
+                payload.release();
             }
         });
     }
 
-    private void processBusinessLogic(WebTransportMessage msg) {
+    private void processBusinessLogic(Channel channel, long sessionId, String path, String type, ByteBuf payload) {
         try {
-            String content = msg.getPayload().toString(StandardCharsets.UTF_8);
+            String content = payload.toString(StandardCharsets.UTF_8);
             logger.debug("⚡️ [APP LAYER] Dispatched to Controller:");
-            logger.debug("    Path: " + msg.getPath());
-            logger.debug("    Type: " + msg.getType());
+            logger.debug("    Path: " + path);
+            logger.debug("    Type: " + type);
             logger.debug("    Data: " + content);
 
             // simulating the reply
-            if (msg.getType().equals(WebTransportMessage.MessageType.BIDIRECTIONAL)) {
-                msg.reply("ACK BI: I received the message from " + msg.getPath() + ": " + content);
+            if ("BIDIRECTIONAL".equals(type)) {
+                reply(channel, sessionId, "ACK BI: I received the message from " + path + ": " + content);
             }
-            if (msg.getType().equals(WebTransportMessage.MessageType.DATAGRAM)) {
-                msg.sendDatagram("ACK DG: I received the message from " + msg.getPath() + ": " + content);
+            if ("DATAGRAM".equals(type)) {
+                sendDatagram(channel, "ACK DG: I received the message from " + path + ": " + content);
             }
 
         } catch (Exception e) {
             e.printStackTrace();
         }
+    }
+
+    private void reply(Channel channel, long sessionId, String text) {
+        if (!(channel instanceof QuicStreamChannel)) {
+            return;
+        }
+        ByteBuf buffer = channel.alloc().directBuffer();
+        buffer.writeBytes(text.getBytes(StandardCharsets.UTF_8));
+        channel.writeAndFlush(buffer);
+        logger.debug("✅ Reply Sent: " + text);
+    }
+
+    private void sendDatagram(Channel channel, String text) {
+        Channel rawChannel = (channel instanceof QuicStreamChannel) ? channel.parent() : channel;
+        ByteBuf buffer = rawChannel.alloc().directBuffer();
+        writeVarInt(buffer, 0);
+        buffer.writeBytes(text.getBytes(StandardCharsets.UTF_8));
+        rawChannel.writeAndFlush(buffer);
+        logger.debug("✅ Datagram Sent: " + text);
     }
 }

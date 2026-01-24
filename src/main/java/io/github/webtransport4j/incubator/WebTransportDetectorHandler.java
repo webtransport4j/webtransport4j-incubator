@@ -15,11 +15,9 @@ import io.netty.channel.ChannelPipeline;
 
 public class WebTransportDetectorHandler extends ChannelInboundHandlerAdapter {
     private static final Logger logger = Logger.getLogger(WebTransportDetectorHandler.class.getName());
-    private final WebTransportSessionManager mgr;
     private boolean checked = false;
 
-    WebTransportDetectorHandler(WebTransportSessionManager mgr) {
-        this.mgr = mgr;
+    WebTransportDetectorHandler() {
     }
 
     @Override
@@ -90,7 +88,7 @@ public class WebTransportDetectorHandler extends ChannelInboundHandlerAdapter {
                 p.addLast(new WebTransportMessageDispatcher());
                 p.remove(this);
                 logger.debug("🔥 FIRING RAW DATA to next handler...");
-                ctx.fireChannelRead(msg);
+                ctx.pipeline().fireChannelRead(msg);
             } else {
                 logger.debug("👉 Unknown Frame: 0x" + Integer.toHexString(firstByte));
             }

@@ -92,7 +92,7 @@ public class WebTransportServer {
                                         QuicChannel quic = stream.parent();
                                         WebTransportSessionManager mgr = quic
                                                 .attr(WebTransportSessionManager.WT_SESSION_MGR).get();
-                                        stream.pipeline().addFirst(new WebTransportDetectorHandler(mgr));
+                                        stream.pipeline().addFirst(new WebTransportDetectorHandler());
                                         stream.pipeline().addLast(new Http3RequestStreamInboundHandler() {
                                             @Override
                                             protected void channelRead(ChannelHandlerContext ctx,
@@ -134,14 +134,14 @@ public class WebTransportServer {
                                                                     logger.debug("🚀 Push Stream Ready!");
 
                                                                     // this is for testing, remove this, just poc
-                                                                    /*
+                                                                    
                                                                     quic.eventLoop().scheduleAtFixedRate(() -> {
                                                                         if (connectStream.isActive()) {
                                                                             ServerPushService.INSTANCE.sendTo(key,
                                                                                     String.valueOf(System.nanoTime()));
                                                                         }
                                                                     }, 0, 1, TimeUnit.SECONDS);
-                                                                    */
+                                                                     
                                                                     connectStream.closeFuture().addListener(f -> {
                                                                         ServerPushService.INSTANCE.unregister(key);
                                                                     });
@@ -171,7 +171,8 @@ public class WebTransportServer {
                                                 ctx.close();
                                             }
                                         });
-                                        stream.pipeline().addLast(new WebTransportMessageDispatcher());
+                                        // stream.pipeline().addLast(new WebTransportMessageDispatcher()); // Removed to
+                                        // correct pipeline order
                                         // DEBUG: Catch-all exception handler
                                         stream.pipeline().addLast(new ChannelInboundHandlerAdapter() {
                                             @Override
