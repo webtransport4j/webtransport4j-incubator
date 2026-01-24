@@ -25,7 +25,6 @@ public class WebTransportMessageDispatcher extends SimpleChannelInboundHandler<B
         // We receive raw ByteBuf now!
         Channel channel = ctx.channel();
 
-        long sessionId;
         String path;
         String type;
         ByteBuf payload;
@@ -34,11 +33,9 @@ public class WebTransportMessageDispatcher extends SimpleChannelInboundHandler<B
         if (channel instanceof QuicStreamChannel) {
             // STREAM (Bidirectional or Unidirectional)
             QuicStreamChannel stream = (QuicStreamChannel) channel;
-            Long sessIdAttr = stream.attr(WebTransportUtils.SESSION_ID_KEY).get();
             Long typeAttr = stream.attr(WebTransportUtils.STREAM_TYPE_KEY).get();
             String pathAttr = stream.parent().attr(WebTransportServer.SESSION_PATH_KEY).get();
 
-            sessionId = (sessIdAttr != null) ? sessIdAttr : -1;
             path = (pathAttr != null) ? pathAttr : "?";
 
             if (typeAttr != null) {
@@ -50,14 +47,8 @@ public class WebTransportMessageDispatcher extends SimpleChannelInboundHandler<B
             payload = msg; // Full message is payload
 
         } else {
-            
-            long quarterStreamId = WebTransportUtils.readVariableLengthInt(msg);
-            sessionId = quarterStreamId; // In DatagramHandler it was << 2, but let's check spec.
-        
 
-            sessionId = quarterStreamId; // Is it quarterStreamId?
-            
-            sessionId = quarterStreamId << 2;
+            WebTransportUtils.readVariableLengthInt(msg);
 
             String pathAttr = channel.attr(WebTransportServer.SESSION_PATH_KEY).get();
             path = (pathAttr != null) ? pathAttr : "?";
@@ -69,20 +60,19 @@ public class WebTransportMessageDispatcher extends SimpleChannelInboundHandler<B
         // CRITICAL: Retain payload for async processing
         payload.retain();
 
-        final long finalSessionId = sessionId;
         final String finalPath = path;
         final String finalType = type;
 
         businessPool.submit(() -> {
             try {
-                processBusinessLogic(channel, finalSessionId, finalPath, finalType, payload);
+                processBusinessLogic(channel, finalPath, finalType, payload);
             } finally {
                 payload.release();
             }
         });
     }
 
-    private void processBusinessLogic(Channel channel, long sessionId, String path, String type, ByteBuf payload) {
+    private void processBusinessLogic(Channel channel, String path, String type, ByteBuf payload) {
         try {
             String content = payload.toString(StandardCharsets.UTF_8);
             logger.debug("⚡️ [APP LAYER] Dispatched to Controller:");
@@ -92,7 +82,9 @@ public class WebTransportMessageDispatcher extends SimpleChannelInboundHandler<B
 
             // simulating the reply
             if ("BIDIRECTIONAL".equals(type)) {
-                reply(channel, sessionId, "ACK BI: I received the message from " + path + ": " + content);
+                if (channel instanceof QuicStreamChannel) {
+                    reply((QuicStreamChannel) channel, "ACK BI: I received the message from " + path + ": " + content);
+                }
             }
             if ("DATAGRAM".equals(type)) {
                 sendDatagram(channel, "ACK DG: I received the message from " + path + ": " + content);
@@ -103,22 +95,26 @@ public class WebTransportMessageDispatcher extends SimpleChannelInboundHandler<B
         }
     }
 
-    private void reply(Channel channel, long sessionId, String text) {
-        if (!(channel instanceof QuicStreamChannel)) {
-            return;
-        }
+    private void reply(QuicStreamChannel channel, String text) {
+    channel.eventLoop().execute(() -> {
         ByteBuf buffer = channel.alloc().directBuffer();
         buffer.writeBytes(text.getBytes(StandardCharsets.UTF_8));
         channel.writeAndFlush(buffer);
         logger.debug("✅ Reply Sent: " + text);
-    }
+    });
+}
+
 
     private void sendDatagram(Channel channel, String text) {
-        Channel rawChannel = (channel instanceof QuicStreamChannel) ? channel.parent() : channel;
+    Channel rawChannel = (channel instanceof QuicStreamChannel) ? channel.parent() : channel;
+
+    rawChannel.eventLoop().execute(() -> {
         ByteBuf buffer = rawChannel.alloc().directBuffer();
         writeVarInt(buffer, 0);
         buffer.writeBytes(text.getBytes(StandardCharsets.UTF_8));
         rawChannel.writeAndFlush(buffer);
         logger.debug("✅ Datagram Sent: " + text);
-    }
+    });
+}
+
 }
