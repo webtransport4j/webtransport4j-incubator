@@ -85,7 +85,7 @@ public class WebTransportDetectorHandler extends ChannelInboundHandlerAdapter {
                 logger.debug("   ➕ Adding RawWebTransportHandler");
                 p.addLast(new RawWebTransportHandler());
                 logger.debug("   ➕ Adding WebTransportMessageDispatcher");
-                p.addLast(new WebTransportMessageDispatcher());
+                p.addLast(new MessageDispatcher());
                 p.remove(this);
                 logger.debug("🔥 FIRING RAW DATA to next handler...");
                 ctx.pipeline().fireChannelRead(msg);

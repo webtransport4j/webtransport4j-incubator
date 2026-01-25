@@ -82,7 +82,8 @@ public class WebTransportServer {
                         logger.debug("    └── 🆔 Channel ID:  " + nettyId);
                         ch.attr(WebTransportSessionManager.WT_SESSION_MGR).set(new WebTransportSessionManager());
                         ch.pipeline().addLast(new WebTransportDatagramHandler());
-                        ch.pipeline().addLast(new WebTransportMessageDispatcher());
+                        ch.pipeline().addLast(new MessageDispatcher());
+                        //ch.pipeline().addLast(new WebTransportMessageDispatcher());
                         ch.pipeline().addLast(new Http3ServerConnectionHandler(
                                 new ChannelInitializer<QuicStreamChannel>() {
                                     @Override
@@ -93,6 +94,7 @@ public class WebTransportServer {
                                         WebTransportSessionManager mgr = quic
                                                 .attr(WebTransportSessionManager.WT_SESSION_MGR).get();
                                         stream.pipeline().addFirst(new WebTransportDetectorHandler());
+                                        stream.pipeline().addLast(new MessageDispatcher());
                                         stream.pipeline().addLast(new Http3RequestStreamInboundHandler() {
                                             @Override
                                             protected void channelRead(ChannelHandlerContext ctx,
@@ -206,20 +208,15 @@ public class WebTransportServer {
                                                             }
                                                             String savedPath = ctx.channel().parent()
                                                                     .attr(WebTransportServer.SESSION_PATH_KEY).get();
-                                                            WebTransportMessage wtMsg = new WebTransportMessage(
-                                                                    WebTransportMessage.MessageType.UNIDIRECTIONAL,
-                                                                    (savedPath != null) ? savedPath : "?",
-                                                                    0,
-                                                                    ((QuicStreamChannel) ctx.channel()).streamId(),
-                                                                    data,
-                                                                    ctx.channel());
-                                                            ctx.fireChannelRead(wtMsg);
+                                                            ctx.channel().attr(WebTransportUtils.STREAM_TYPE_KEY).set(streamType);  
+                                                            ctx.channel().attr(WebTransportServer.SESSION_PATH_KEY).set(savedPath);  
+                                                            ctx.fireChannelRead(msg);
                                                         } else {
                                                             ctx.fireChannelRead(msg);
                                                         }
                                                     }
                                                 });
-                                                ch.pipeline().addLast(new WebTransportMessageDispatcher());
+                                                ch.pipeline().addLast(new MessageDispatcher());
                                             }
                                         };
                                     }

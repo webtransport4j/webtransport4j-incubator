@@ -14,9 +14,9 @@ import org.apache.log4j.Logger;
 
 import static io.github.webtransport4j.incubator.WebTransportUtils.writeVarInt;
 
-public class WebTransportMessageDispatcher extends SimpleChannelInboundHandler<ByteBuf> {
+public class MessageDispatcher extends SimpleChannelInboundHandler<ByteBuf> {
 
-    private static final Logger logger = Logger.getLogger(WebTransportMessageDispatcher.class.getName());
+    private static final Logger logger = Logger.getLogger(MessageDispatcher.class.getName());
     // Simulating your Business Logic Thread Pool
     private static final ExecutorService businessPool = Executors.newFixedThreadPool(4);
 
@@ -80,6 +80,8 @@ public class WebTransportMessageDispatcher extends SimpleChannelInboundHandler<B
             logger.debug("    Type: " + type);
             logger.debug("    Data: " + content);
 
+            
+            
             // simulating the reply
             if ("BIDIRECTIONAL".equals(type)) {
                 if (channel instanceof QuicStreamChannel) {
