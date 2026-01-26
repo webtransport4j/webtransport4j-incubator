@@ -12,10 +12,12 @@ import io.netty.channel.EventLoopGroup;
 import io.netty.channel.MultiThreadIoEventLoopGroup;
 import io.netty.channel.nio.NioIoHandler;
 import io.netty.channel.socket.nio.NioDatagramChannel;
+import io.netty.handler.codec.http3.DefaultHttp3Headers;
 import io.netty.handler.codec.http3.DefaultHttp3HeadersFrame;
 import io.netty.handler.codec.http3.DefaultHttp3SettingsFrame;
 import io.netty.handler.codec.http3.Http3;
 import io.netty.handler.codec.http3.Http3DataFrame;
+import io.netty.handler.codec.http3.Http3Headers;
 import io.netty.handler.codec.http3.Http3HeadersFrame;
 import io.netty.handler.codec.http3.Http3RequestStreamInboundHandler;
 import io.netty.handler.codec.http3.Http3ServerConnectionHandler;
@@ -88,12 +90,13 @@ public class WebTransportServer {
                                 new ChannelInitializer<QuicStreamChannel>() {
                                     @Override
                                     protected void initChannel(QuicStreamChannel stream) {
-                                        // DEBUG: Print when a stream is created
+              ;                          // DEBUG: Print when a stream is created
                                         // logger.debug("🌊 Stream Created: " + stream.id());
                                         QuicChannel quic = stream.parent();
                                         WebTransportSessionManager mgr = quic
                                                 .attr(WebTransportSessionManager.WT_SESSION_MGR).get();
                                         stream.pipeline().addFirst(new WebTransportDetectorHandler());
+                                        stream.pipeline().addLast(new RawWebTransportHandler());
                                         stream.pipeline().addLast(new MessageDispatcher());
                                         stream.pipeline().addLast(new Http3RequestStreamInboundHandler() {
                                             @Override
@@ -116,9 +119,10 @@ public class WebTransportServer {
                                                         && "webtransport".contentEquals(protocol)) {
                                                     ctx.channel().parent().attr(SESSION_PATH_KEY).set(path.toString());
                                                     logger.debug("✅ Handshake Success for Path: " + path);
-                                                    Http3HeadersFrame resp = new DefaultHttp3HeadersFrame();
-                                                    resp.headers().status("200");
-                                                    ctx.writeAndFlush(resp);
+                                                    Http3Headers responseHeaders = new DefaultHttp3Headers();
+                                                    responseHeaders.status("200");
+                                                    // PURE HTTP/3 Frame. No manual byte writing here!
+                                                    ctx.writeAndFlush(new DefaultHttp3HeadersFrame(responseHeaders));
                                                     mgr.register((QuicStreamChannel) ctx.channel());
                                                     QuicStreamChannel connectStream = (QuicStreamChannel) ctx.channel();
                                                     mgr.register(connectStream);
