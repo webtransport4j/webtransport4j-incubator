@@ -124,8 +124,8 @@ public class WebTransportServer {
                                                     logger.debug("✅ Handshake Success for Path: " + path);
                                                     Http3Headers responseHeaders = new DefaultHttp3Headers();
                                                     responseHeaders.status("200");
-                                                    responseHeaders.set("sec-webtransport-http3-draft", "draft02");
-                                                    responseHeaders.set("sec-webtransport-http3-draft02","1");
+                                                    // responseHeaders.set("sec-webtransport-http3-draft", "draft02");
+                                                    // responseHeaders.set("sec-webtransport-http3-draft02","1");
                                                     // PURE HTTP/3 Frame. No manual byte writing here!
                                                     ctx.writeAndFlush(new DefaultHttp3HeadersFrame(responseHeaders));
                                                     mgr.register((QuicStreamChannel) ctx.channel());
