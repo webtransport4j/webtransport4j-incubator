@@ -1,124 +1,138 @@
 package io.github.webtransport4j.incubator;
 
 import io.netty.buffer.ByteBuf;
-import io.netty.buffer.ByteBufUtil;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandlerContext;
-import io.netty.channel.SimpleChannelInboundHandler;
+import io.netty.handler.codec.ByteToMessageDecoder; // CHANGED: Use this instead of SimpleChannelInboundHandler
 import io.netty.handler.codec.quic.QuicStreamChannel;
 import org.apache.log4j.Logger;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
-import static io.github.webtransport4j.incubator.WebTransportUtils.writeVarInt;
-
-public class MessageDispatcher extends SimpleChannelInboundHandler<ByteBuf> {
+// 1. EXTEND ByteToMessageDecoder (Crucial for handling fragmentation)
+public class MessageDispatcher extends ByteToMessageDecoder {
 
     private static final Logger logger = Logger.getLogger(MessageDispatcher.class.getName());
     private static final ExecutorService businessPool = Executors.newFixedThreadPool(4);
 
     @Override
-    protected void channelRead0(ChannelHandlerContext ctx, ByteBuf msg) {
+    protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) throws Exception {
         Channel channel = ctx.channel();
-        
-        // 1. Debug: Log the raw hex to see invisible bytes (like 0x00)
-        if (logger.isDebugEnabled()) {
-             logger.debug("📦 [RAW PAYLOAD] " + ByteBufUtil.hexDump(msg));
+
+        // --- DATAGRAMS (No Stream Framing) ---
+        if (!(channel instanceof QuicStreamChannel)) {
+            // Datagrams are always whole packets
+            ByteBuf fullMsg = in.readBytes(in.readableBytes());
+            processDatagramPacket(ctx, fullMsg);
+            return;
         }
 
-        String path;
-        String transportType;
-        
-        // Determine Context
-        if (channel instanceof QuicStreamChannel) {
-            QuicStreamChannel stream = (QuicStreamChannel) channel;
-            Long typeAttr = stream.attr(WebTransportUtils.STREAM_TYPE_KEY).get();
-            String pathAttr = stream.parent().attr(WebTransportServer.SESSION_PATH_KEY).get();
+        // --- STREAMS (Handle Headers & Fragmentation) ---
+        while (in.isReadable()) {
+            in.markReaderIndex(); // Save current position
 
-            path = (pathAttr != null) ? pathAttr : "?";
-            transportType = (typeAttr != null && typeAttr == 0x54) ? "UNIDIRECTIONAL" : "BIDIRECTIONAL";
-        } else {
-            WebTransportUtils.readVariableLengthInt(msg); // consume datagram ID
-            String pathAttr = channel.attr(WebTransportServer.SESSION_PATH_KEY).get();
-            path = (pathAttr != null) ? pathAttr : "?";
-            transportType = "DATAGRAM";
+            // 1. Check if we have enough bytes for the smallest header (1 byte)
+            if (in.readableBytes() < 1) {
+                in.resetReaderIndex();
+                return; // Wait for more network data
+            }
+
+            // 2. Read the Header
+            int firstByte = in.readUnsignedByte();
+            long length = firstByte & 0x7F; // Remove binary flag
+
+            // 3. Handle Extended Lengths (126 -> 2 bytes, 127 -> 8 bytes)
+            if (length == 126) {
+                if (in.readableBytes() < 2) {
+                    in.resetReaderIndex();
+                    return; // Wait for length bytes
+                }
+                length = in.readUnsignedShort();
+            } else if (length == 127) {
+                if (in.readableBytes() < 8) {
+                    in.resetReaderIndex();
+                    return; // Wait for length bytes
+                }
+                length = in.readLong();
+            }
+
+            // 4. Check if we have the FULL payload
+            if (in.readableBytes() < length) {
+                in.resetReaderIndex(); // REWIND! Wait for the rest of the body.
+                // logger.debug("⏳ Waiting for body... Need " + length + " bytes");
+                return;
+            }
+
+            // 5. Read the payload
+            ByteBuf payload = in.readBytes((int) length);
+
+            // 6. Process
+            dispatchStreamPacket(ctx, payload);
         }
+    }
 
-        // 2. Offload to Business Logic
-        msg.retain(); 
-        final String finalPath = path;
-        final String finalType = transportType;
+    private void dispatchStreamPacket(ChannelHandlerContext ctx, ByteBuf msg) {
+        Channel channel = ctx.channel();
+        QuicStreamChannel stream = (QuicStreamChannel) channel;
+        Long typeAttr = stream.attr(WebTransportUtils.STREAM_TYPE_KEY).get();
+        String pathAttr = stream.parent().attr(WebTransportServer.SESSION_PATH_KEY).get();
 
+        String path = (pathAttr != null) ? pathAttr : "?";
+        String transportType = (typeAttr != null && typeAttr == 0x54) ? "UNIDIRECTIONAL" : "BIDIRECTIONAL";
+
+        msg.retain();
         businessPool.submit(() -> {
             try {
-                processBusinessLogic(channel, finalPath, finalType, msg);
-                //processSocketIOPacket(channel, finalPath, finalType, msg);
+                processSocketIOPacket(channel, path, transportType, msg);
             } finally {
                 msg.release();
             }
         });
     }
-    private void processBusinessLogic(Channel channel, String path, String type, ByteBuf payload) {
-        try {
-            String content = payload.toString(StandardCharsets.UTF_8);
-            logger.debug("⚡️ [APP LAYER] Dispatched to Controller:");
-            logger.debug("    Path: " + path);
-            logger.debug("    Type: " + type);
-            logger.debug("    Data: " + content);
 
-            
-            
-            // simulating the reply
-            if ("BIDIRECTIONAL".equals(type)) {
-                if (channel instanceof QuicStreamChannel) {
-                    reply((QuicStreamChannel) channel, "ACK BI: I received the message from " + path + ": " + content);
-                }
+    private void processDatagramPacket(ChannelHandlerContext ctx, ByteBuf msg) {
+        Channel channel = ctx.channel();
+        WebTransportUtils.readVariableLengthInt(msg); // consume datagram ID
+        String pathAttr = channel.attr(WebTransportServer.SESSION_PATH_KEY).get();
+        String path = (pathAttr != null) ? pathAttr : "?";
+
+        msg.retain();
+        businessPool.submit(() -> {
+            try {
+                processSocketIOPacket(channel, path, "DATAGRAM", msg);
+            } finally {
+                msg.release();
             }
-            if ("DATAGRAM".equals(type)) {
-                sendDatagram(channel, "ACK DG: I received the message from " + path + ": " + content);
-            }
-        } catch (Exception e) {
-            logger.error("Error in business logic", e);
-        }
+        });
     }
 
     private void processSocketIOPacket(Channel channel, String path, String transportType, ByteBuf payload) {
         try {
-            // Convert to String
-            String rawContent = payload.toString(StandardCharsets.UTF_8);
-            logger.debug("⚡️ [SOCKET.IO] " + transportType + " | Raw: " + rawContent);
-            if (rawContent.isEmpty()) return;
-
-            // 🔍 FIX: Sanitize the input to remove Ghost Bytes (0x00, 0x01, etc)
-            // This finds the first index that IS NOT a control character
-            int validStartIndex = 0;
-            while (validStartIndex < rawContent.length() && rawContent.charAt(validStartIndex) <= 32) {
-                validStartIndex++;
-            }
-
-            // If string was only garbage/control chars
-            if (validStartIndex >= rawContent.length()) {
-                logger.debug("⚠️ Ignored packet containing only control characters.");
+            String content = payload.toString(StandardCharsets.UTF_8);
+            if (content.isEmpty())
                 return;
-            }
 
-            // Extract the clean content
-            String content = rawContent.substring(validStartIndex);
-
-            // 1. Parse Socket.IO Packet Type
-            char packetType = content.charAt(0);
+            // 1. Parse Engine.IO Packet Type
+            char engineType = content.charAt(0);
             String data = (content.length() > 1) ? content.substring(1) : "";
 
-            logger.debug("⚡️ [SOCKET.IO] " + transportType + " | Type: " + packetType + " | Data: " + data);
+            logger.debug("⚡️ [SOCKET.IO] " + transportType + " | Type: " + engineType + " | Data: " + data);
 
-            // 2. Handle Types
-            switch (packetType) {
-                case '0': // OPEN
-                    logger.info("👋 Received OPEN (Handshake). Data: " + data);
-                    // Standard Socket.IO reply to Open is usually an Open packet back with session ID
-                    reply(channel, "0{\"sid\":\"" + channel.id().asShortText() + "\",\"upgrades\":[],\"pingInterval\":25000,\"pingTimeout\":20000}");
+            switch (engineType) {
+                case '0': // ENGINE.IO OPEN
+                    // Reply with Handshake Data
+                    reply(channel,
+                            "0{\"sid\":\"69f5ba63-c0ed-4eb8-9010-f4a0c27725d4\",\"upgrades\":[],\"pingInterval\":25000,\"pingTimeout\":60000}");
+                     channel.eventLoop().scheduleAtFixedRate(() -> {
+                        if (channel.isActive()) {
+                            logger.debug("❤️ Sending Server PING");
+                            reply(channel, "2"); // Engine.IO PING packet
+                        }
+                    }, 25, 25, TimeUnit.SECONDS);
                     break;
 
                 case '1': // CLOSE
@@ -127,6 +141,7 @@ public class MessageDispatcher extends SimpleChannelInboundHandler<ByteBuf> {
                     break;
 
                 case '2': // PING
+                    // Reply with PONG (3)
                     logger.debug("❤️ Received PING. Sending PONG...");
                     reply(channel, "3");
                     break;
@@ -134,15 +149,22 @@ public class MessageDispatcher extends SimpleChannelInboundHandler<ByteBuf> {
                 case '3': // PONG
                     logger.debug("💓 Received PONG (Client alive).");
                     break;
-                
+
                 case '4': // MESSAGE
-                    logger.info("📩 Received MESSAGE: " + data);
+                    // Check for Socket.IO Layer 2 Connect (40)
+                    if (data.startsWith("0")) {
+                        logger.info("🔌 Client Connecting to Namespace: " + data);
+                        // V4 Fix: Must return SID object
+                        reply(channel, "40{\"sid\":\"69f5ba63-c0ed-4eb8-9010-f4a0c27725d4\"}");
+                    } else {
+                        logger.info("📩 Received MESSAGE: " + data);
+                        reply(channel,"4"+ data);
+                    }
                     break;
 
                 default:
-                    logger.warn("⚠️ Unknown Packet Type: '" + packetType + "' (Ascii: " + (int)packetType + ")");
+                    logger.warn("⚠️ Unknown Packet Type: '" + engineType + "'");
             }
-
         } catch (Exception e) {
             logger.error("Error processing packet", e);
         }
@@ -151,20 +173,27 @@ public class MessageDispatcher extends SimpleChannelInboundHandler<ByteBuf> {
     private void reply(Channel channel, String text) {
         channel.eventLoop().execute(() -> {
             ByteBuf buffer = channel.alloc().directBuffer();
-            buffer.writeBytes(text.getBytes(StandardCharsets.UTF_8));
-            channel.writeAndFlush(buffer);
-            logger.debug("✅ Sent Reply: " + text);
+            byte[] data = text.getBytes(StandardCharsets.UTF_8);
+            int len = data.length;
+
+            // --- HEADER ENCODING ---
+            if (len < 126) {
+                buffer.writeByte(len);
+            } else if (len < 65536) {
+                buffer.writeByte(126);
+                buffer.writeShort(len);
+            } else {
+                buffer.writeByte(127);
+                buffer.writeLong(len);
+            }
+            buffer.writeBytes(data);
+
+            channel.writeAndFlush(buffer).addListener(future -> {
+                if (!future.isSuccess()) {
+                    logger.error("❌ Write Failed", future.cause());
+                }
+            });
+            logger.debug("✅ Replied: " + text);
         });
     }
-    private void sendDatagram(Channel channel, String text) {
-    Channel rawChannel = (channel instanceof QuicStreamChannel) ? channel.parent() : channel;
-
-    rawChannel.eventLoop().execute(() -> {
-        ByteBuf buffer = rawChannel.alloc().directBuffer();
-        writeVarInt(buffer, 0);
-        buffer.writeBytes(text.getBytes(StandardCharsets.UTF_8));
-        rawChannel.writeAndFlush(buffer);
-        logger.debug("✅ Datagram Sent: " + text);
-    });
-}
 }

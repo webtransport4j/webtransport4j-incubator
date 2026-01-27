@@ -3,6 +3,7 @@ package io.github.webtransport4j.incubator;
 import io.github.webtransport4j.incubator.applayer.ServerPushService;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufUtil;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
@@ -33,6 +34,7 @@ import io.netty.util.ReferenceCountUtil;
 
 import java.io.File;
 import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
@@ -58,6 +60,7 @@ public class WebTransportServer {
                 .enableConnectProtocol(true)
                 .setenablewebtransport(true)
                 .enableH3Datagram(true);
+        logger.debug(settings);
         ChannelHandler serverCodec = Http3.newQuicServerCodecBuilder()
                 .sslContext(sslContext)
                 .maxIdleTimeout(30, TimeUnit.SECONDS)
@@ -85,13 +88,13 @@ public class WebTransportServer {
                         ch.attr(WebTransportSessionManager.WT_SESSION_MGR).set(new WebTransportSessionManager());
                         ch.pipeline().addLast(new WebTransportDatagramHandler());
                         ch.pipeline().addLast(new MessageDispatcher());
-                        //ch.pipeline().addLast(new WebTransportMessageDispatcher());
+                        // ch.pipeline().addLast(new WebTransportMessageDispatcher());
                         ch.pipeline().addLast(new Http3ServerConnectionHandler(
                                 new ChannelInitializer<QuicStreamChannel>() {
                                     @Override
                                     protected void initChannel(QuicStreamChannel stream) {
-              ;                          // DEBUG: Print when a stream is created
-                                        // logger.debug("🌊 Stream Created: " + stream.id());
+                                        ; // DEBUG: Print when a stream is created
+                                          // logger.debug("🌊 Stream Created: " + stream.id());
                                         QuicChannel quic = stream.parent();
                                         WebTransportSessionManager mgr = quic
                                                 .attr(WebTransportSessionManager.WT_SESSION_MGR).get();
@@ -121,6 +124,8 @@ public class WebTransportServer {
                                                     logger.debug("✅ Handshake Success for Path: " + path);
                                                     Http3Headers responseHeaders = new DefaultHttp3Headers();
                                                     responseHeaders.status("200");
+                                                    responseHeaders.set("sec-webtransport-http3-draft", "draft02");
+                                                    responseHeaders.set("sec-webtransport-http3-draft02","1");
                                                     // PURE HTTP/3 Frame. No manual byte writing here!
                                                     ctx.writeAndFlush(new DefaultHttp3HeadersFrame(responseHeaders));
                                                     mgr.register((QuicStreamChannel) ctx.channel());
@@ -134,27 +139,29 @@ public class WebTransportServer {
                                                     // new ServerPushService(quic, sessionId).startPushing();
                                                     logger.debug("⏳ Creating Push Stream...");
                                                     String key = "key";
-                                                    WebTransportUtils.createUniStream(quic, sessionId, key)
-                                                            .addListener(future -> {
-                                                                if (future.isSuccess()) {
-                                                                    logger.debug("🚀 Push Stream Ready!");
-
-                                                                    // this is for testing, remove this, just poc
-                                                                    
-                                                                    quic.eventLoop().scheduleAtFixedRate(() -> {
-                                                                        if (connectStream.isActive()) {
-                                                                            ServerPushService.INSTANCE.sendTo(key,
-                                                                                    String.valueOf(System.nanoTime()));
-                                                                        }
-                                                                    }, 0, 1, TimeUnit.SECONDS);
-                                                                     
-                                                                    connectStream.closeFuture().addListener(f -> {
-                                                                        ServerPushService.INSTANCE.unregister(key);
-                                                                    });
-                                                                } else {
-                                                                    System.err.println("❌ Failed: " + future.cause());
-                                                                }
-                                                            });
+                                                    /*
+                                                     * WebTransportUtils.createUniStream(quic, sessionId, key)
+                                                     * .addListener(future -> {
+                                                     * if (future.isSuccess()) {
+                                                     * logger.debug("🚀 Push Stream Ready!");
+                                                     * 
+                                                     * // this is for testing, remove this, just poc
+                                                     * 
+                                                     * quic.eventLoop().scheduleAtFixedRate(() -> {
+                                                     * if (connectStream.isActive()) {
+                                                     * ServerPushService.INSTANCE.sendTo(key,
+                                                     * String.valueOf(System.nanoTime()));
+                                                     * }
+                                                     * }, 0, 1, TimeUnit.SECONDS);
+                                                     * 
+                                                     * connectStream.closeFuture().addListener(f -> {
+                                                     * ServerPushService.INSTANCE.unregister(key);
+                                                     * });
+                                                     * } else {
+                                                     * System.err.println("❌ Failed: " + future.cause());
+                                                     * }
+                                                     * });
+                                                     */
                                                 }
                                                 ReferenceCountUtil.release(frame);
                                             }
@@ -162,7 +169,29 @@ public class WebTransportServer {
                                             @Override
                                             protected void channelRead(ChannelHandlerContext ctx,
                                                     Http3DataFrame frame) {
-                                                ctx.fireChannelRead(frame);
+                                                ByteBuf content = frame.content();
+
+                                                logger.debug("=== [DEBUG] Received HTTP/3 DataFrame ===");
+                                                logger.debug(
+                                                        "    ├── 📏 Length: " + content.readableBytes() + " bytes");
+
+                                                // 1. The "Pretty" Dump (Hex + ASCII side-by-side)
+                                                // This generates a multi-line string that looks like Wireshark output
+                                                if (content.isReadable()) {
+                                                    logger.debug("\n" + ByteBufUtil.prettyHexDump(content));
+                                                }
+
+                                                // 2. Compact Hex (Single line, if you prefer)
+                                                logger.debug("    ├── 📦 Raw Hex: " + ByteBufUtil.hexDump(content));
+
+                                                // 3. Clean String (Replace invisible control chars with dots)
+                                                logger.debug("    ├── 🔤 Clean ASCII: " + content
+                                                        .toString(StandardCharsets.UTF_8).replaceAll("[\\p{Cc}]", "."));
+
+                                                // Ensure you release the frame if you are the last handler touching it
+                                                frame.release();
+                                                // OR if you use SimpleChannelInboundHandler, it releases automatically,
+                                                // so be careful not to double-release or read after release.
                                             }
 
                                             @Override
@@ -212,8 +241,10 @@ public class WebTransportServer {
                                                             }
                                                             String savedPath = ctx.channel().parent()
                                                                     .attr(WebTransportServer.SESSION_PATH_KEY).get();
-                                                            ctx.channel().attr(WebTransportUtils.STREAM_TYPE_KEY).set(streamType);  
-                                                            ctx.channel().attr(WebTransportServer.SESSION_PATH_KEY).set(savedPath);  
+                                                            ctx.channel().attr(WebTransportUtils.STREAM_TYPE_KEY)
+                                                                    .set(streamType);
+                                                            ctx.channel().attr(WebTransportServer.SESSION_PATH_KEY)
+                                                                    .set(savedPath);
                                                             ctx.fireChannelRead(msg);
                                                         } else {
                                                             ctx.fireChannelRead(msg);
